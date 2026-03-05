@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NC Real-Time Moisture Monitor</title>
+    <style>
+        body { background: #000; color: #0f0; font-family: monospace; text-align: center; }
+        .container { margin-top: 20px; }
+        img { max-width: 95%; border: 1px solid #333; }
+    </style>
+</head>
+<body>
+    <h2>NC / MID-ATLANTIC MESOSCALE ANALYSIS</h2>
+    <div class="container">
+        <img id="map" src="output_map.png" alt="Generating latest data...">
+    </div>
+    <p>Satellite: MIMIC-TPW2 | Vectors: RAP 925mb Advection</p>
+
+    <script>
+        // Force refresh by adding timestamp to the image URL
+        const mapImg = document.getElementById('map');
+        mapImg.src = "output_map.png?v=" + new Date().getTime();
+
+        // Refresh the whole page every 5 minutes
+        setTimeout(() => { location.reload(); }, 300000);
+    </script>
+</body>
+</html>
