@@ -1,27 +1,37 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>NC Real-Time Moisture Monitor</title>
+    <meta charset="UTF-8">
+    <title>SE US Mesoscale Analysis</title>
     <style>
-        body { background: #000; color: #0f0; font-family: monospace; text-align: center; }
-        .container { margin-top: 20px; }
-        img { max-width: 95%; border: 1px solid #333; }
+        body { background-color: #000; color: #00ff00; font-family: 'Courier New', monospace; text-align: center; margin: 0; padding: 20px; }
+        img { max-width: 100%; height: auto; border: 1px solid #444; box-shadow: 0 0 20px rgba(0,255,0,0.1); }
+        .info { margin-top: 10px; font-size: 0.8rem; color: #888; }
     </style>
 </head>
 <body>
-    <h2>NC / MID-ATLANTIC MESOSCALE ANALYSIS</h2>
-    <div class="container">
-        <img id="map" src="output_map.png" alt="Generating latest data...">
+    <h1>NC/VA/SC MOISTURE MONITOR</h1>
+    <div id="status" style="font-size: 0.7rem; margin-bottom: 10px;">REFRESHING...</div>
+    
+    <img id="weather-map" src="output_map.png" alt="Map loading...">
+
+    <div class="info">
+        Satellite: MIMIC-TPW2 (SSEC) | Model: RAP 13km (NCEP) | Levels: 925mb
     </div>
-    <p>Satellite: MIMIC-TPW2 | Vectors: RAP 925mb Advection</p>
 
     <script>
-        // Force refresh by adding timestamp to the image URL
-        const mapImg = document.getElementById('map');
-        mapImg.src = "output_map.png?v=" + new Date().getTime();
+        const map = document.getElementById('weather-map');
+        const status = document.getElementById('status');
 
-        // Refresh the whole page every 5 minutes
-        setTimeout(() => { location.reload(); }, 300000);
+        function update() {
+            const now = new Date();
+            map.src = "output_map.png?v=" + now.getTime();
+            status.innerText = "LAST BROWSER SYNC: " + now.toLocaleTimeString();
+        }
+
+        // Run on load and every 5 minutes
+        update();
+        setInterval(update, 300000);
     </script>
 </body>
 </html>
