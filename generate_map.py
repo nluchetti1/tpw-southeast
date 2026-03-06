@@ -1,96 +1,50 @@
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-from satpy import Scene
-import metpy.calc as mpcalc
-from metpy.units import units
-from herbie import Herbie
-import datetime
-import xarray as xr
-import numpy as np
-import requests
-import os
+name: Update Weather Dashboard
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
-# --- 1. SATELLITE DATA (MIMIC-TPW2) ---
-now = datetime.datetime.utcnow()
-local_file = "latest_mimic.nc"
-found_sat = False
+permissions:
+  contents: write
 
-for i in range(4):
-    check_time = now - datetime.timedelta(hours=i)
-    fname = check_time.strftime("%Y%m%d_%H00.nc")
-    url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{check_time.year}/{fname}"
-    try:
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
-        if r.status_code == 200:
-            with open(local_file, 'wb') as f:
-                f.write(r.content)
-            found_sat = True
-            break
-    except: continue
+jobs:
+  run-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
 
-tpw_data = None
-if found_sat:
-    try:
-        scn = Scene(reader='mimic_TPW2_nc', filenames=[local_file])
-        scn.load(['tpw'])
-        tpw_ds = scn.to_xarray_dataset()
-        tpw_data = tpw_ds['tpw']
-        if tpw_data.y[0] < tpw_data.y[-1]:
-            tpw_data = tpw_data.sortby('y', ascending=False)
-        tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
-    except Exception as e: print(f"Satpy Error: {e}")
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-# --- 2. MODEL DATA (RAP 925mb via Herbie) ---
-adv = None
-try:
-    # Use Herbie to find the latest RAP run, similar to your other code
-    H = Herbie(now.replace(minute=0, second=0, microsecond=0), 
-               model='rap', product='awp130pgrb', fxx=0, verbose=False)
-    
-    # Grab 925mb U/V winds and Specific Humidity for advection
-    ds_rap = H.xarray(":(UGRD|VGRD|SPFH):925 mb").metpy.parse_cf()
-    
-    u = ds_rap['u'].metpy.unit_array
-    v = ds_rap['v'].metpy.unit_array
-    q = ds_rap['spfh'].metpy.unit_array
-    
-    lons, lats = ds_rap.longitude, ds_rap.latitude
-    dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
-    adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
-except Exception as e:
-    print(f"Herbie RAP Error: {e}")
+      - name: Install System Geo-Libs
+        run: |
+          sudo apt-get update
+          # Install essential engines for GRIB2 (RAP) and Mapping (Cartopy)
+          sudo apt-get install -y libgeos-dev libproj-dev proj-data proj-bin libhdf5-dev libeccodes-dev libeccodes-tools
 
-# --- 3. PLOT ---
-fig = plt.figure(figsize=(12, 9), facecolor='black')
-ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-ax.set_extent([-88, -74, 31, 40]) # SE US Focus
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Force a clean install of Herbie and its GRIB2 backend (cfgrib)
+          pip install --no-cache-dir herbie cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests
 
-# Satellite Background
-if tpw_data is not None:
-    ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', alpha=0.7, shading='auto')
+      - name: Diagnostic Check
+        run: |
+          echo "Checking for Herbie..."
+          python -c "import herbie; print('SUCCESS: Herbie is installed at', herbie.__file__)"
+          echo "Checking for GRIB engine..."
+          python -c "import cfgrib; print('SUCCESS: cfgrib is ready')"
 
-# RAP Advection Overlay
-if adv is not None:
-    clevs = np.arange(2, 22, 4)
-    cs = ax.contour(lons, lats, adv, levels=clevs, colors='red', linewidths=1.2, transform=ccrs.PlateCarree())
-    ax.clabel(cs, inline=True, fontsize=9, fmt='%d', colors='white')
-    ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], 
-              u.values[::4, ::4], v.values[::4, ::4], 
-              color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.8)
+      - name: Generate Plot
+        run: python generate_map.py
 
-# Map Features (Counties Added)
-ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
-ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan', linewidth=1.0)
-
-# High-res counties
-counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', 
-                                        scale='10m', facecolor='none')
-ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
-
-plt.title(f"MIMIC-TPW2 + RAP 925mb Moisture Advection\nValid: {now.strftime('%H:%MZ %d %b %Y')}", 
-          color='white', fontsize=14, pad=15)
-
-plt.savefig('output_map.png', facecolor='black', bbox_inches='tight', dpi=150)
+      - name: Commit Update
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add output_map.png
+          git commit -m "Auto-Update: $(date)" || exit 0
+          git push
