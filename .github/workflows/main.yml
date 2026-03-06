@@ -31,7 +31,6 @@ jobs:
 
       - name: Pre-create Output Files
         run: |
-          # This prevents git commit from failing if no data is found
           touch output_map.png
           touch output_animation.gif
 
@@ -42,7 +41,6 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          # The --force or manual touch ensures these are always trackable
           git add output_map.png output_animation.gif
           git commit -m "Auto-Update: $(date)" || exit 0
           git push
