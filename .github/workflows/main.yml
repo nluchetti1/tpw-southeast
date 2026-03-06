@@ -27,12 +27,13 @@ jobs:
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Explicitly installing imageio alongside herbie-data
           python -m pip install --no-cache-dir herbie-data cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests imageio
 
-      - name: Verify Animation Engine
+      - name: Pre-create Output Files
         run: |
-          python -c "import imageio; print('SUCCESS: ImageIO ready for animation')"
+          # This prevents git commit from failing if no data is found
+          touch output_map.png
+          touch output_animation.gif
 
       - name: Generate Plot
         run: python generate_map.py
@@ -41,7 +42,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          # Ensure both the static map and the animation are added
+          # The --force or manual touch ensures these are always trackable
           git add output_map.png output_animation.gif
-          git commit -m "Auto-Update Animation: $(date)" || exit 0
+          git commit -m "Auto-Update: $(date)" || exit 0
           git push
