@@ -27,17 +27,17 @@ for i in range(num_steps, -1, -1):
     time_str = target_time.strftime("%Y%m%d_%H00")
     
     tpw_data = None
-    adv, lons, lats, u, v = None, None, None, None, None
+    transport, lons, lats, u, v = None, None, None, None, None
 
-    # 1. FETCH SATELLITE
+    # 1. FETCH SATELLITE (Inches)
     fname = f"{time_str}.nc"
     url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{target_time.year}/{fname}"
     local_nc = f"sat_{i}.nc"
     try:
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        if r.status_code == 200:
+        r_sat = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        if r_sat.status_code == 200:
             with open(local_nc, 'wb') as f:
-                f.write(r.content)
+                f.write(r_sat.content)
             scn = Scene(reader='mimic_TPW2_nc', filenames=[local_nc])
             scn.load(['tpw'])
             ds_sat = scn.to_xarray_dataset()
@@ -47,61 +47,61 @@ for i in range(num_steps, -1, -1):
             tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
     except: pass
 
-    # 2. FETCH RAP (Using awp252pgrb for guaranteed moisture data)
+    # 2. FETCH RAP & CALCULATE MOISTURE TRANSPORT
     try:
         H = Herbie(target_time, model='rap', product='awp252pgrb', fxx=0, 
                    priority=['aws', 'nomads'], verbose=False)
         
-        # Load the whole 925mb level to avoid key-search failures
         ds_rap = H.xarray(":925 mb").metpy.parse_cf()
         
-        # Identification Logic
-        u_key = [k for k in ds_rap.data_vars if k.lower() in ['u', 'ugrd']]
-        v_key = [k for k in ds_rap.data_vars if k.lower() in ['v', 'vgrd']]
-        # Many RAP products use 'q' or 'shuv' for humidity
-        q_key = [k for k in ds_rap.data_vars if k.lower() in ['q', 'spfh', 'shuv', 'specific_humidity']]
-
-        if u_key and v_key and q_key:
-            u = ds_rap[u_key[0]].metpy.unit_array
-            v = ds_rap[v_key[0]].metpy.unit_array
-            q = ds_rap[q_key[0]].metpy.unit_array
+        u_raw = ds_rap['u'].metpy.unit_array
+        v_raw = ds_rap['v'].metpy.unit_array
+        wind_speed = mpcalc.wind_speed(u_raw, v_raw)
+        
+        # Calculate Mixing Ratio (g/g) from T and RH
+        rel_hum = ds_rap['r'].metpy.unit_array / 100.0
+        temp = ds_rap['t'].metpy.unit_array
+        pressure = 925 * units.hPa
+        mixing_ratio = mpcalc.mixing_ratio_from_relative_humidity(pressure, temp, rel_hum)
+        
+        # Calculate Moisture Transport (Scaled by 100)
+        # Formula: (Wind Speed * Mixing Ratio) * 100
+        transport = (wind_speed.magnitude * mixing_ratio.magnitude) * 100
             
-            lons, lats = ds_rap.longitude, ds_rap.latitude
-            dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
-            adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
-        else:
-            print(f"  > Missing keys in {time_str}Z: U={u_key}, V={v_key}, Q={q_key}")
-            # If Q is still missing, list all keys to debug
-            print(f"    Available keys: {list(ds_rap.data_vars)}")
+        lons, lats = ds_rap.longitude, ds_rap.latitude
+        u, v = u_raw, v_raw
             
     except Exception as e:
-        print(f"  > RAP extraction failed for {time_str}: {e}")
+        print(f"  > RAP process failed for {time_str}: {e}")
 
     # 3. PLOT FRAME
-    if tpw_data is not None or adv is not None:
+    if tpw_data is not None or transport is not None:
         fig = plt.figure(figsize=(12, 9), facecolor='black')
         ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
         ax.set_extent([-88, -74, 31, 40])
 
         if tpw_data is not None:
-            im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', 
-                               alpha=0.8, shading='auto', vmin=0.5, vmax=2.5)
-            cb = plt.colorbar(im, ax=ax, orientation='vertical', pad=0.02, aspect=30)
-            cb.set_label('Precipitable Water (inches)', color='white')
-            cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
+            im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='Greys_r', 
+                               alpha=0.4, shading='auto', vmin=0.5, vmax=2.5)
 
-        if adv is not None:
-            cs = ax.contour(lons, lats, adv, levels=np.arange(2, 22, 4), colors='red', linewidths=1.5)
-            ax.clabel(cs, inline=True, fontsize=10, fmt='%d', colors='white')
+        if transport is not None:
+            # Color fill for Moisture Transport (Targeting those "pink" high values)
+            clevs = [5, 10, 15, 20, 24, 28, 32, 36, 40]
+            cf = ax.contourf(lons, lats, transport, levels=clevs, cmap='RdPu', alpha=0.7)
+            cb = plt.colorbar(cf, ax=ax, orientation='vertical', pad=0.02, aspect=30)
+            cb.set_label('925mb Moisture Transport (m/s)', color='white')
+            cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
+            
+            # Wind quivers
             ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], u.values[::4, ::4], v.values[::4, ::4], 
-                      color='white', scale=400, transform=ccrs.PlateCarree())
+                      color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.6)
 
         ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
         ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan')
         counties = cfeature.NaturalEarthFeature('cultural', 'admin_2_counties', '10m', facecolor='none')
         ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
 
-        plt.title(f"MIMIC-TPW (in) + RAP 925mb Advection\nValid: {target_time.strftime('%H:%MZ %d %b %Y')}", 
+        plt.title(f"MIMIC-TPW + RAP 925mb Moisture Transport\nValid: {target_time.strftime('%H:%MZ %d %b %Y')}", 
                   color='white', fontsize=14)
         
         frame_path = f"frames/frame_{i:02d}.png"
