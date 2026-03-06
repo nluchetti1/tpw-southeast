@@ -45,12 +45,16 @@ if found_sat:
 
 # --- 2. MODEL DATA (RAP 13km) ---
 adv = None
+lons, lats = None, None
+u, v = None, None
+
 try:
     cat = TDSCatalog('https://thredds.ucar.edu/thredds/catalog/grib/NCEP/RAP/CONUS_13km/latest.xml')
+    # Open dataset and parse projection metadata immediately
     ds_rap = cat.datasets[0].remote_access(use_xarray=True).metpy.parse_cf()
     
-    # Selecting 925mb. We use MetPy selectors to handle the projected grid
-    # 'isobaric' is the vertical coordinate in RAP
+    # RAP uses 'isobaric' as the coordinate name for pressure levels
+    # We subset to the 925 hPa level
     subset_rap = ds_rap.metpy.sel(isobaric=925 * units.hPa, 
                                  lat=slice(42, 28), lon=slice(-90, -70))
     
@@ -58,11 +62,11 @@ try:
     v = subset_rap['v-component_of_wind_isobaric']
     q = subset_rap['Specific_humidity_isobaric']
     
-    # FORCE COORDINATE EXTRACTION: 
-    # If standard 'lat' fails, we pull from the CF-parsed coordinates
-    lons = subset_rap.metpy.longitude
-    lats = subset_rap.metpy.latitude
+    # USE METPY ACCESSORS TO FIND COORDS (Fixes the "No variable named lat" error)
+    lons = u.metpy.longitude
+    lats = u.metpy.latitude
     
+    # Calculate Advection
     dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
     adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
 except Exception as e: 
@@ -71,31 +75,28 @@ except Exception as e:
 # --- 3. PLOT ---
 fig = plt.figure(figsize=(12, 9), facecolor='black')
 ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-ax.set_extent([-88, -74, 31, 40]) # NC/VA/SC/GA Focus
+ax.set_extent([-88, -74, 31, 40]) # Zoom on SE US (NC/VA/SC/GA)
 
-# Background Satellite
+# Satellite Background
 if tpw_data is not None:
-    sat_plot = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', alpha=0.8, shading='auto')
-    plt.colorbar(sat_plot, ax=ax, orientation='vertical', pad=0.02, label='TPW (mm)')
+    ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', alpha=0.8, shading='auto')
 
-# Foreground RAP Advection & Winds
-if adv is not None:
-    # Plot Advection Contours
+# Advection Overlay
+if adv is not None and lons is not None:
+    # Plot Advection Contours (Positive = Red)
     clevs = np.arange(2, 22, 4)
     cs = ax.contour(lons, lats, adv, levels=clevs, colors='red', linewidths=1.5, transform=ccrs.PlateCarree())
     ax.clabel(cs, inline=True, fontsize=10, fmt='%d', colors='white')
     
-    # Plot Wind Quivers (Winds at 925mb)
-    # Subsample [::4] to keep the map from getting cluttered
+    # Plot Wind Vectors
     ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], 
               u.values[::4, ::4], v.values[::4, ::4], 
               color='white', scale=400, transform=ccrs.PlateCarree())
 
-# Geography
-ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1)
+ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=0.8)
 ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan')
 
-plt.title(f"MIMIC-TPW2 Satellite + RAP 925mb Advection\nValid: {now.strftime('%H:%MZ %d %b %Y')}", 
-          color='white', fontsize=14, pad=20)
+plt.title(f"MIMIC-TPW2 + RAP 925mb Moisture Advection\nValid: {datetime.datetime.utcnow().strftime('%H:%MZ %d %b %Y')}", 
+          color='white', fontsize=14, pad=15)
 
 plt.savefig('output_map.png', facecolor='black', bbox_inches='tight', dpi=150)
