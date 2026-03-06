@@ -17,7 +17,7 @@ import imageio.v2 as imageio
 # --- SETUP ---
 now = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
 frames = []
-num_steps = 10  # Look back 10 hours for a better loop
+num_steps = 10 
 
 if not os.path.exists('frames'):
     os.makedirs('frames')
@@ -29,7 +29,7 @@ for i in range(num_steps, -1, -1):
     tpw_data = None
     adv, lons, lats, u, v = None, None, None, None, None
 
-    # 1. FETCH SATELLITE (Inches)
+    # 1. FETCH SATELLITE
     fname = f"{time_str}.nc"
     url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{target_time.year}/{fname}"
     local_nc = f"sat_{i}.nc"
@@ -47,17 +47,18 @@ for i in range(num_steps, -1, -1):
             tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
     except: pass
 
-    # 2. FETCH RAP (Robust Variable Selection)
+    # 2. FETCH RAP (Using awp252pgrb for guaranteed moisture data)
     try:
-        H = Herbie(target_time, model='rap', product='awp130pgrb', fxx=0, 
+        H = Herbie(target_time, model='rap', product='awp252pgrb', fxx=0, 
                    priority=['aws', 'nomads'], verbose=False)
         
-        # Broader search to ensure we capture all 925mb variables
+        # Load the whole 925mb level to avoid key-search failures
         ds_rap = H.xarray(":925 mb").metpy.parse_cf()
         
-        # SOFT-MATCH VARIABLES: Finds 'u' or 'ugrd', 'v' or 'vgrd', 'q' or 'spfh'
-        u_key = [k for k in ds_rap.data_vars if 'u' == k.lower() or 'ugrd' in k.lower()]
-        v_key = [k for k in ds_rap.data_vars if 'v' == k.lower() or 'vgrd' in k.lower()]
+        # Identification Logic
+        u_key = [k for k in ds_rap.data_vars if k.lower() in ['u', 'ugrd']]
+        v_key = [k for k in ds_rap.data_vars if k.lower() in ['v', 'vgrd']]
+        # Many RAP products use 'q' or 'shuv' for humidity
         q_key = [k for k in ds_rap.data_vars if k.lower() in ['q', 'spfh', 'shuv', 'specific_humidity']]
 
         if u_key and v_key and q_key:
@@ -69,7 +70,10 @@ for i in range(num_steps, -1, -1):
             dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
             adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
         else:
-            print(f"  > Missing specific keys in {time_str}Z: U={u_key}, V={v_key}, Q={q_key}")
+            print(f"  > Missing keys in {time_str}Z: U={u_key}, V={v_key}, Q={q_key}")
+            # If Q is still missing, list all keys to debug
+            print(f"    Available keys: {list(ds_rap.data_vars)}")
+            
     except Exception as e:
         print(f"  > RAP extraction failed for {time_str}: {e}")
 
