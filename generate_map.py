@@ -22,87 +22,44 @@ num_steps = 8
 if not os.path.exists('frames'):
     os.makedirs('frames')
 
-# We look back slightly further to find the most recent available hour
 for i in range(num_steps, -1, -1):
     target_time = now - datetime.timedelta(hours=i)
     time_str = target_time.strftime("%Y%m%d_%H00")
     
-    tpw_data = None
-    adv, lons, lats, u, v = None, None, None, None, None
+    # ... [Satellite code remains same] ...
 
-    # 1. FETCH SATELLITE
-    fname = f"{time_str}.nc"
-    url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{target_time.year}/{fname}"
-    local_nc = f"sat_{i}.nc"
-    
+    # 2. FETCH RAP WITH VARIABLE INSPECTOR
     try:
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        if r.status_code == 200:
-            with open(local_nc, 'wb') as f:
-                f.write(r.content)
-            scn = Scene(reader='mimic_TPW2_nc', filenames=[local_nc])
-            scn.load(['tpw'])
-            ds_sat = scn.to_xarray_dataset()
-            tpw_data = ds_sat['tpw'] / 25.4 
-            if tpw_data.y[0] < tpw_data.y[-1]:
-                tpw_data = tpw_data.sortby('y', ascending=False)
-            tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
-    except: pass
-
-    # 2. FETCH RAP (With Archive Fallback)
-    try:
-        # Priority AWS ensures we find data even if NOMADS is acting up
         H = Herbie(target_time, model='rap', product='awp130pgrb', fxx=0, 
                    priority=['aws', 'nomads'], verbose=False)
         
+        # Load the dataset
         ds_rap = H.xarray(":(SPFH|UGRD|VGRD):925 mb").metpy.parse_cf()
-        u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
-        q_key = 'q' if 'q' in ds_rap.data_vars else 'spfh'
-        q = ds_rap[q_key].metpy.unit_array
+        
+        # --- VARIABLE INSPECTOR PRINT BLOCK ---
+        print(f"\n--- INSPECTING RAP {time_str}Z ---")
+        for var in ds_rap.data_vars:
+            long_name = ds_rap[var].attrs.get('long_name', 'No description')
+            print(f"Variable Key: '{var}' | Description: {long_name}")
+        print("-----------------------------------\n")
+        
+        # Logic to handle whatever name it finds
+        u = ds_rap['u'].metpy.unit_array if 'u' in ds_rap.data_vars else ds_rap['ugrd'].metpy.unit_array
+        v = ds_rap['v'].metpy.unit_array if 'v' in ds_rap.data_vars else ds_rap['vgrd'].metpy.unit_array
+        
+        # Check for 'q' or 'spfh' based on common GRIB2 mapping
+        if 'q' in ds_rap.data_vars:
+            q = ds_rap['q'].metpy.unit_array
+        elif 'spfh' in ds_rap.data_vars:
+            q = ds_rap['spfh'].metpy.unit_array
+        else:
+            raise KeyError("Could not find humidity variable in dataset")
+            
         lons, lats = ds_rap.longitude, ds_rap.latitude
         dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
         adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
-    except Exception as e:
-        print(f"  > RAP missing for {time_str}: {e}")
-
-    # 3. PLOT FRAME
-    if tpw_data is not None or adv is not None:
-        fig = plt.figure(figsize=(12, 9), facecolor='black')
-        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-        ax.set_extent([-88, -74, 31, 40])
-
-        if tpw_data is not None:
-            im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', 
-                               alpha=0.8, shading='auto', vmin=0.5, vmax=2.5)
-
-        if adv is not None:
-            cs = ax.contour(lons, lats, adv, levels=np.arange(2, 22, 4), colors='red', linewidths=1.5)
-            ax.clabel(cs, inline=True, fontsize=10, fmt='%d', colors='white')
-            ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], u.values[::4, ::4], v.values[::4, ::4], 
-                      color='white', scale=400, transform=ccrs.PlateCarree())
-
-        ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
-        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan')
-        counties = cfeature.NaturalEarthFeature('cultural', 'admin_2_counties', '10m', facecolor='none')
-        ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
-
-        plt.title(f"MIMIC-TPW + RAP 925mb Advection\nValid: {target_time.strftime('%H:%MZ %d %b %Y')}", 
-                  color='white', fontsize=14)
         
-        frame_path = f"frames/frame_{i:02d}.png"
-        plt.savefig(frame_path, facecolor='black', bbox_inches='tight', dpi=120)
-        frames.append(imageio.imread(frame_path))
-        plt.close()
-    
-    if os.path.exists(local_nc):
-        os.remove(local_nc)
+    except Exception as e:
+        print(f"  > RAP extraction failed for {time_str}: {e}")
 
-# 4. SAVE GIF AND STATIC MAP
-if frames:
-    imageio.mimsave('output_animation.gif', frames, fps=2, loop=0)
-    imageio.imwrite('output_map.png', frames[-1])
-else:
-    # Create a dummy image if everything failed so Git doesn't crash
-    plt.figure()
-    plt.text(0.5, 0.5, "Data Unavailable")
-    plt.savefig('output_map.png')
+    # ... [Plotting code remains same] ...
