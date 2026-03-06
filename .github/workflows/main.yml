@@ -18,25 +18,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          # We are removing the cache temporarily to force a clean environment
-          
+
       - name: Install System Geo-Libs
         run: |
           sudo apt-get update
+          # Install GRIB2 engines and mapping libraries
           sudo apt-get install -y libgeos-dev libproj-dev proj-data proj-bin libhdf5-dev libeccodes-dev libeccodes-tools
 
-      - name: Force Install Dependencies
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # We use -m pip install to ensure it links to the current python executable
-          python -m pip install herbie cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests
+          # CRITICAL: Use herbie-data, NOT herbie
+          python -m pip install --no-cache-dir herbie-data cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests
 
       - name: Verify Environment
         run: |
-          # If these fail, the log will show exactly where it looked
-          python -m pip show herbie
-          python -c "import herbie; print('SUCCESS: Herbie found at', herbie.__file__)"
-          python -c "import cfgrib; print('SUCCESS: GRIB engine found')"
+          # Confirming the correct weather-based Herbie is found
+          python -c "import herbie; print('SUCCESS: Weather Herbie loaded from', herbie.__file__)"
+          python -c "import cfgrib; print('SUCCESS: GRIB engine ready')"
 
       - name: Generate Plot
         run: python generate_map.py
