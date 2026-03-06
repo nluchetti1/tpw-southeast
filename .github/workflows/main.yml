@@ -22,20 +22,17 @@ jobs:
       - name: Install System Geo-Libs
         run: |
           sudo apt-get update
-          # Install GRIB2 engines and mapping libraries
           sudo apt-get install -y libgeos-dev libproj-dev proj-data proj-bin libhdf5-dev libeccodes-dev libeccodes-tools
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # CRITICAL: Use herbie-data, NOT herbie
-          python -m pip install --no-cache-dir herbie-data cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests
+          # Explicitly installing imageio alongside herbie-data
+          python -m pip install --no-cache-dir herbie-data cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests imageio
 
-      - name: Verify Environment
+      - name: Verify Animation Engine
         run: |
-          # Confirming the correct weather-based Herbie is found
-          python -c "import herbie; print('SUCCESS: Weather Herbie loaded from', herbie.__file__)"
-          python -c "import cfgrib; print('SUCCESS: GRIB engine ready')"
+          python -c "import imageio; print('SUCCESS: ImageIO ready for animation')"
 
       - name: Generate Plot
         run: python generate_map.py
@@ -44,6 +41,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add output_map.png
-          git commit -m "Auto-Update: $(date)" || exit 0
+          # Ensure both the static map and the animation are added
+          git add output_map.png output_animation.gif
+          git commit -m "Auto-Update Animation: $(date)" || exit 0
           git push
