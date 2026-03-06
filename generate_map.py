@@ -13,6 +13,7 @@ import numpy as np
 import requests
 import os
 import imageio
+import imageio.v2 as imageio
 
 # --- SETUP ---
 now = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
