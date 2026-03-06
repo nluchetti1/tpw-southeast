@@ -6,11 +6,12 @@ import cartopy.feature as cfeature
 from satpy import Scene
 import metpy.calc as mpcalc
 from metpy.units import units
-from herbie import Herbie # Use Herbie like your other script
+from herbie import Herbie
 import datetime
 import xarray as xr
 import numpy as np
 import requests
+import os
 
 # --- 1. SATELLITE DATA (MIMIC-TPW2) ---
 now = datetime.datetime.utcnow()
@@ -42,55 +43,52 @@ if found_sat:
         tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
     except Exception as e: print(f"Satpy Error: {e}")
 
-# --- 2. THE HERBIE FIX FOR RAP 925MB ---
+# --- 2. MODEL DATA (RAP 925mb via Herbie) ---
 adv = None
-lons, lats = None, None
-u, v = None, None
-
 try:
-    # Look for the freshest RAP run (matching your other script's logic)
-    for h_back in range(0, 4):
-        check_time = (now - datetime.timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
-        try:
-            # Targeting the RAP model at 925mb for winds and moisture
-            H = Herbie(check_time, model='rap', product='awp130pgrb', verbose=False)
-            # Fetch 925mb Winds and Specific Humidity (used for moisture advection)
-            ds_rap = H.xarray(":(UGRD|VGRD|SPFH):925 mb").metpy.parse_cf()
-            break
-        except: continue
-
-    # Extract components using the names Herbie standardizes
+    # Use Herbie to find the latest RAP run, similar to your other code
+    H = Herbie(now.replace(minute=0, second=0, microsecond=0), 
+               model='rap', product='awp130pgrb', fxx=0, verbose=False)
+    
+    # Grab 925mb U/V winds and Specific Humidity for advection
+    ds_rap = H.xarray(":(UGRD|VGRD|SPFH):925 mb").metpy.parse_cf()
+    
     u = ds_rap['u'].metpy.unit_array
     v = ds_rap['v'].metpy.unit_array
-    q = ds_rap['spfh'].metpy.unit_array # Specific Humidity at 925mb
+    q = ds_rap['spfh'].metpy.unit_array
     
-    lats = ds_rap.latitude
-    lons = ds_rap.longitude
-    
-    # Calculate Advection
+    lons, lats = ds_rap.longitude, ds_rap.latitude
     dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
     adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
-except Exception as e: 
-    print(f"Herbie RAP Extraction Failed: {e}")
+except Exception as e:
+    print(f"Herbie RAP Error: {e}")
 
 # --- 3. PLOT ---
 fig = plt.figure(figsize=(12, 9), facecolor='black')
 ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-ax.set_extent([-88, -74, 31, 40]) 
+ax.set_extent([-88, -74, 31, 40]) # SE US Focus
 
+# Satellite Background
 if tpw_data is not None:
-    ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', alpha=0.8, shading='auto')
+    ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', alpha=0.7, shading='auto')
 
+# RAP Advection Overlay
 if adv is not None:
-    cs = ax.contour(lons, lats, adv, levels=np.arange(2, 22, 4), 
-                    colors='red', linewidths=1.5, transform=ccrs.PlateCarree())
-    ax.clabel(cs, inline=True, fontsize=10, fmt='%d', colors='white')
+    clevs = np.arange(2, 22, 4)
+    cs = ax.contour(lons, lats, adv, levels=clevs, colors='red', linewidths=1.2, transform=ccrs.PlateCarree())
+    ax.clabel(cs, inline=True, fontsize=9, fmt='%d', colors='white')
     ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], 
               u.values[::4, ::4], v.values[::4, ::4], 
-              color='white', scale=400, transform=ccrs.PlateCarree())
+              color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.8)
 
-ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=0.8)
-ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan')
+# Map Features (Counties Added)
+ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
+ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan', linewidth=1.0)
+
+# High-res counties
+counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', 
+                                        scale='10m', facecolor='none')
+ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
 
 plt.title(f"MIMIC-TPW2 + RAP 925mb Moisture Advection\nValid: {now.strftime('%H:%MZ %d %b %Y')}", 
           color='white', fontsize=14, pad=15)
