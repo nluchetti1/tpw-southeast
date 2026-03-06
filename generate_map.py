@@ -29,11 +29,10 @@ for i in range(num_steps, -1, -1):
     tpw_data = None
     adv, lons, lats, u, v = None, None, None, None, None
 
-    # 1. FETCH SATELLITE (Inches)
+    # 1. FETCH SATELLITE
     fname = f"{time_str}.nc"
     url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{target_time.year}/{fname}"
     local_nc = f"sat_{i}.nc"
-    
     try:
         r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if r.status_code == 200:
@@ -42,24 +41,24 @@ for i in range(num_steps, -1, -1):
             scn = Scene(reader='mimic_TPW2_nc', filenames=[local_nc])
             scn.load(['tpw'])
             ds_sat = scn.to_xarray_dataset()
-            tpw_data = ds_sat['tpw'] / 25.4 # Convert mm to inches
+            tpw_data = ds_sat['tpw'] / 25.4 
             if tpw_data.y[0] < tpw_data.y[-1]:
                 tpw_data = tpw_data.sortby('y', ascending=False)
             tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
     except: pass
 
-    # 2. FETCH RAP (Using 'wrfprs' for full pressure-level variables)
+    # 2. FETCH RAP (Using awp130pgrb for standard Lambert grid compatibility)
     try:
-        # Changed 'conus' to 'wrfprs' based on server availability
-        H = Herbie(target_time, model='rap', product='wrfprs', fxx=0, 
+        # awp130pgrb is the most stable 13km grid for MetPy
+        H = Herbie(target_time, model='rap', product='awp130pgrb', fxx=0, 
                    priority=['aws', 'nomads'], verbose=False)
         
-        # Load 925 mb data
-        ds_rap = H.xarray(":925 mb").metpy.parse_cf()
+        # Pull 925 mb data. We search specifically for U, V, and Humidity
+        ds_rap = H.xarray(":(UGRD|VGRD|SPFH):925 mb").metpy.parse_cf()
         
         u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
         
-        # Robust check for humidity variable
+        # Check for 'q' or 'spfh' - the standard name varies by server
         q_key = [k for k in ds_rap.data_vars if k in ['q', 'spfh', 'shuv']][0]
         q = ds_rap[q_key].metpy.unit_array
             
@@ -88,7 +87,6 @@ for i in range(num_steps, -1, -1):
             ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], u.values[::4, ::4], v.values[::4, ::4], 
                       color='white', scale=400, transform=ccrs.PlateCarree())
 
-        # Features
         ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
         ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan')
         counties = cfeature.NaturalEarthFeature('cultural', 'admin_2_counties', '10m', facecolor='none')
