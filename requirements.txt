@@ -1,10 +1,11 @@
+herbie
+cfgrib
 satpy
 pyresample
 xarray
 netCDF4
 metpy
 cartopy
-siphon
 matplotlib
 scipy
 requests
