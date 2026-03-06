@@ -12,94 +12,99 @@ import xarray as xr
 import numpy as np
 import requests
 import os
+import imageio
 
-# --- 1. SATELLITE DATA (MIMIC-TPW2) ---
-now = datetime.datetime.utcnow()
-local_file = "latest_mimic.nc"
-found_sat = False
+# --- SETUP ---
+now = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+frames = []
+num_steps = 8  # Number of hours to animate
 
-# Search last 4 hours for a valid Satellite NetCDF
-for i in range(4):
-    check_time = now - datetime.timedelta(hours=i)
-    fname = check_time.strftime("%Y%m%d_%H00.nc")
-    url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{check_time.year}/{fname}"
+# Create a temporary directory for frames
+if not os.path.exists('frames'):
+    os.makedirs('frames')
+
+print(f"Generating animation for the last {num_steps} hours...")
+
+for i in range(num_steps, -1, -1):
+    target_time = now - datetime.timedelta(hours=i)
+    time_str = target_time.strftime("%Y%m%d_%H00")
+    print(f"Processing: {time_str}Z")
+    
+    tpw_data = None
+    adv, lons, lats, u, v = None, None, None, None, None
+
+    # 1. FETCH SATELLITE (Hourly)
+    fname = f"{time_str}.nc"
+    url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{target_time.year}/{fname}"
+    local_nc = f"sat_{i}.nc"
+    
     try:
-        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         if r.status_code == 200:
-            with open(local_file, 'wb') as f:
+            with open(local_nc, 'wb') as f:
                 f.write(r.content)
-            found_sat = True
-            break
-    except: continue
+            scn = Scene(reader='mimic_TPW2_nc', filenames=[local_nc])
+            scn.load(['tpw'])
+            ds_sat = scn.to_xarray_dataset()
+            tpw_data = ds_sat['tpw'] / 25.4  # Convert to inches
+            if tpw_data.y[0] < tpw_data.y[-1]:
+                tpw_data = tpw_data.sortby('y', ascending=False)
+            tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
+    except:
+        print(f"  > Satellite missing for {time_str}")
 
-tpw_data = None
-if found_sat:
+    # 2. FETCH RAP (Hourly Analysis f00)
     try:
-        scn = Scene(reader='mimic_TPW2_nc', filenames=[local_file])
-        scn.load(['tpw'])
-        tpw_ds = scn.to_xarray_dataset()
-        # Convert mm to inches
-        tpw_data = tpw_ds['tpw'] / 25.4 
+        H = Herbie(target_time, model='rap', product='awp130pgrb', fxx=0, verbose=False)
+        ds_rap = H.xarray(":(SPFH|UGRD|VGRD):925 mb").metpy.parse_cf()
+        u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
+        q = ds_rap['q'].metpy.unit_array if 'q' in ds_rap.data_vars else ds_rap['spfh'].metpy.unit_array
+        lons, lats = ds_rap.longitude, ds_rap.latitude
+        dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
+        adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
+    except:
+        print(f"  > RAP missing for {time_str}")
+
+    # 3. PLOT FRAME
+    if tpw_data is not None or adv is not None:
+        fig = plt.figure(figsize=(12, 9), facecolor='black')
+        ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+        ax.set_extent([-88, -74, 31, 40])
+
+        if tpw_data is not None:
+            im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', 
+                               alpha=0.8, shading='auto', vmin=0.5, vmax=2.5)
+            cb = plt.colorbar(im, ax=ax, pad=0.02, aspect=30)
+            cb.set_label('Precipitable Water (inches)', color='white')
+            cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
+
+        if adv is not None:
+            cs = ax.contour(lons, lats, adv, levels=np.arange(2, 22, 4), colors='red', linewidths=1.5)
+            ax.clabel(cs, inline=True, fontsize=10, fmt='%d', colors='white')
+            ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], u.values[::4, ::4], v.values[::4, ::4], 
+                      color='white', scale=400, transform=ccrs.PlateCarree())
+
+        ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
+        ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan')
+        counties = cfeature.NaturalEarthFeature('cultural', 'admin_2_counties', '10m', facecolor='none')
+        ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
+
+        plt.title(f"MIMIC-TPW + RAP 925mb Advection\nValid: {target_time.strftime('%H:%MZ %d %b %Y')}", 
+                  color='white', fontsize=14)
         
-        if tpw_data.y[0] < tpw_data.y[-1]:
-            tpw_data = tpw_data.sortby('y', ascending=False)
-        tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
-    except Exception as e: print(f"Satpy Error: {e}")
+        frame_path = f"frames/frame_{i:02d}.png"
+        plt.savefig(frame_path, facecolor='black', bbox_inches='tight', dpi=120)
+        frames.append(imageio.v2.imread(frame_path))
+        plt.close()
+    
+    # Clean up local NC file
+    if os.path.exists(local_nc):
+        os.remove(local_nc)
 
-# --- 2. MODEL DATA (RAP 925mb via Herbie) ---
-adv, lons, lats, u, v = None, None, None, None, None
-try:
-    # Try the last 3 hours to ensure we find a run with a valid index file
-    for h_back in range(0, 3):
-        try:
-            target_t = (now - datetime.timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
-            H = Herbie(target_t, model='rap', product='awp130pgrb', fxx=0, verbose=False)
-            # Fetch variables
-            ds_rap = H.xarray(":(SPFH|UGRD|VGRD):925 mb").metpy.parse_cf()
-            
-            u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
-            q_key = 'q' if 'q' in ds_rap.data_vars else 'spfh'
-            q = ds_rap[q_key].metpy.unit_array
-            
-            lons, lats = ds_rap.longitude, ds_rap.latitude
-            dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
-            adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
-            break # Exit loop if successful
-        except: continue
-except Exception as e: print(f"RAP Extraction Error: {e}")
-
-# --- 3. PLOT ---
-fig = plt.figure(figsize=(12, 9), facecolor='black')
-ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-ax.set_extent([-88, -74, 31, 40]) 
-
-# Plot Satellite Background (Inches)
-if tpw_data is not None:
-    # Scale vmin/vmax for inches (typically 0.5 to 2.5 in Southeast)
-    sat_im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', 
-                           alpha=0.8, shading='auto', vmin=0.5, vmax=2.5)
-    cb = plt.colorbar(sat_im, ax=ax, orientation='vertical', pad=0.02, aspect=30)
-    cb.set_label('Precipitable Water (inches)', color='white')
-    cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
-
-# Plot RAP Advection Overlay
-if adv is not None and lons is not None:
-    clevs = np.arange(2, 22, 4)
-    cs = ax.contour(lons, lats, adv, levels=clevs, colors='red', linewidths=1.2, transform=ccrs.PlateCarree())
-    ax.clabel(cs, inline=True, fontsize=9, fmt='%d', colors='white')
-    ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], 
-              u.values[::4, ::4], v.values[::4, ::4], 
-              color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.8)
-
-# Geography Features
-ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
-ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan', linewidth=1.0)
-# Add 10m Counties
-counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', 
-                                        scale='10m', facecolor='none')
-ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
-
-plt.title(f"MIMIC-TPW2 (in) + RAP 925mb Moisture Advection\nValid: {now.strftime('%H:%MZ %d %b %Y')}", 
-          color='white', fontsize=14, pad=15)
-
-plt.savefig('output_map.png', facecolor='black', bbox_inches='tight', dpi=150)
+# 4. SAVE GIF
+if frames:
+    # Reverse frames back to chronological order (loop goes backwards to find latest first)
+    frames.reverse()
+    imageio.v2.mimsave('output_animation.gif', frames, fps=2, loop=0)
+    # Save the last frame as a static image too
+    imageio.v2.imwrite('output_map.png', frames[-1])
