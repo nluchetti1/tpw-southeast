@@ -1,4 +1,4 @@
-herbie
+herbie-data
 cfgrib
 satpy
 pyresample
