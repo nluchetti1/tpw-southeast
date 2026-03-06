@@ -48,18 +48,19 @@ for i in range(num_steps, -1, -1):
             tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
     except: pass
 
-    # 2. FETCH RAP (Using 'conus' for full variables)
+    # 2. FETCH RAP (Using 'wrfprs' for full pressure-level variables)
     try:
-        H = Herbie(target_time, model='rap', product='conus', fxx=0, 
+        # Changed 'conus' to 'wrfprs' based on server availability
+        H = Herbie(target_time, model='rap', product='wrfprs', fxx=0, 
                    priority=['aws', 'nomads'], verbose=False)
         
-        # Pull 925mb level. 'conus' product includes humidity.
+        # Load 925 mb data
         ds_rap = H.xarray(":925 mb").metpy.parse_cf()
         
         u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
         
-        # Map humidity (standard name in RAP conus is 'q')
-        q_key = 'q' if 'q' in ds_rap.data_vars else 'spfh'
+        # Robust check for humidity variable
+        q_key = [k for k in ds_rap.data_vars if k in ['q', 'spfh', 'shuv']][0]
         q = ds_rap[q_key].metpy.unit_array
             
         lons, lats = ds_rap.longitude, ds_rap.latitude
@@ -77,7 +78,6 @@ for i in range(num_steps, -1, -1):
         if tpw_data is not None:
             im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', 
                                alpha=0.8, shading='auto', vmin=0.5, vmax=2.5)
-            # Add colorbar for satellite data
             cb = plt.colorbar(im, ax=ax, orientation='vertical', pad=0.02, aspect=30)
             cb.set_label('Precipitable Water (inches)', color='white')
             cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
