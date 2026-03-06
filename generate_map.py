@@ -17,7 +17,7 @@ import imageio.v2 as imageio
 # --- SETUP ---
 now = datetime.datetime.utcnow().replace(minute=0, second=0, microsecond=0)
 frames = []
-num_steps = 8  
+num_steps = 10  # Look back 10 hours for a better loop
 
 if not os.path.exists('frames'):
     os.makedirs('frames')
@@ -29,7 +29,7 @@ for i in range(num_steps, -1, -1):
     tpw_data = None
     adv, lons, lats, u, v = None, None, None, None, None
 
-    # 1. FETCH SATELLITE
+    # 1. FETCH SATELLITE (Inches)
     fname = f"{time_str}.nc"
     url = f"https://tropic.ssec.wisc.edu/archive/data/mtpw2/{target_time.year}/{fname}"
     local_nc = f"sat_{i}.nc"
@@ -47,24 +47,29 @@ for i in range(num_steps, -1, -1):
             tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
     except: pass
 
-    # 2. FETCH RAP (Using awp130pgrb for standard Lambert grid compatibility)
+    # 2. FETCH RAP (Robust Variable Selection)
     try:
-        # awp130pgrb is the most stable 13km grid for MetPy
         H = Herbie(target_time, model='rap', product='awp130pgrb', fxx=0, 
                    priority=['aws', 'nomads'], verbose=False)
         
-        # Pull 925 mb data. We search specifically for U, V, and Humidity
-        ds_rap = H.xarray(":(UGRD|VGRD|SPFH):925 mb").metpy.parse_cf()
+        # Broader search to ensure we capture all 925mb variables
+        ds_rap = H.xarray(":925 mb").metpy.parse_cf()
         
-        u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
-        
-        # Check for 'q' or 'spfh' - the standard name varies by server
-        q_key = [k for k in ds_rap.data_vars if k in ['q', 'spfh', 'shuv']][0]
-        q = ds_rap[q_key].metpy.unit_array
+        # SOFT-MATCH VARIABLES: Finds 'u' or 'ugrd', 'v' or 'vgrd', 'q' or 'spfh'
+        u_key = [k for k in ds_rap.data_vars if 'u' == k.lower() or 'ugrd' in k.lower()]
+        v_key = [k for k in ds_rap.data_vars if 'v' == k.lower() or 'vgrd' in k.lower()]
+        q_key = [k for k in ds_rap.data_vars if k.lower() in ['q', 'spfh', 'shuv', 'specific_humidity']]
+
+        if u_key and v_key and q_key:
+            u = ds_rap[u_key[0]].metpy.unit_array
+            v = ds_rap[v_key[0]].metpy.unit_array
+            q = ds_rap[q_key[0]].metpy.unit_array
             
-        lons, lats = ds_rap.longitude, ds_rap.latitude
-        dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
-        adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
+            lons, lats = ds_rap.longitude, ds_rap.latitude
+            dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
+            adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
+        else:
+            print(f"  > Missing specific keys in {time_str}Z: U={u_key}, V={v_key}, Q={q_key}")
     except Exception as e:
         print(f"  > RAP extraction failed for {time_str}: {e}")
 
