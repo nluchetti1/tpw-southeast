@@ -54,9 +54,9 @@ for i in range(num_steps, -1, -1):
         
         ds_rap = H.xarray(":925 mb").metpy.parse_cf()
         
-        u_raw = ds_rap['u'].metpy.unit_array
-        v_raw = ds_rap['v'].metpy.unit_array
-        wind_speed = mpcalc.wind_speed(u_raw, v_raw)
+        u_qty = ds_rap['u'].metpy.unit_array
+        v_qty = ds_rap['v'].metpy.unit_array
+        wind_speed = mpcalc.wind_speed(u_qty, v_qty)
         
         # Calculate Mixing Ratio (g/g) from T and RH
         rel_hum = ds_rap['r'].metpy.unit_array / 100.0
@@ -64,12 +64,13 @@ for i in range(num_steps, -1, -1):
         pressure = 925 * units.hPa
         mixing_ratio = mpcalc.mixing_ratio_from_relative_humidity(pressure, temp, rel_hum)
         
-        # Calculate Moisture Transport (Scaled by 100)
-        # Formula: (Wind Speed * Mixing Ratio) * 100
+        # Scale moisture transport by 100 as requested
+        # We use .magnitude because contourf/quiver need raw arrays
         transport = (wind_speed.magnitude * mixing_ratio.magnitude) * 100
-            
-        lons, lats = ds_rap.longitude, ds_rap.latitude
-        u, v = u_raw, v_raw
+        u = u_qty.magnitude
+        v = v_qty.magnitude
+        lons = ds_rap.longitude.values
+        lats = ds_rap.latitude.values
             
     except Exception as e:
         print(f"  > RAP process failed for {time_str}: {e}")
@@ -81,19 +82,20 @@ for i in range(num_steps, -1, -1):
         ax.set_extent([-88, -74, 31, 40])
 
         if tpw_data is not None:
-            im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='Greys_r', 
-                               alpha=0.4, shading='auto', vmin=0.5, vmax=2.5)
+            # Satellite background in grayscale to let transport colors pop
+            ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='Greys_r', 
+                          alpha=0.3, shading='auto', vmin=0.5, vmax=2.5)
 
         if transport is not None:
-            # Color fill for Moisture Transport (Targeting those "pink" high values)
+            # Pink shades for high transport values
             clevs = [5, 10, 15, 20, 24, 28, 32, 36, 40]
             cf = ax.contourf(lons, lats, transport, levels=clevs, cmap='RdPu', alpha=0.7)
             cb = plt.colorbar(cf, ax=ax, orientation='vertical', pad=0.02, aspect=30)
             cb.set_label('925mb Moisture Transport (m/s)', color='white')
             cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
             
-            # Wind quivers
-            ax.quiver(lons.values[::4, ::4], lats.values[::4, ::4], u.values[::4, ::4], v.values[::4, ::4], 
+            # Wind quivers - using .magnitude arrays for plotting
+            ax.quiver(lons[::4, ::4], lats[::4, ::4], u[::4, ::4], v[::4, ::4], 
                       color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.6)
 
         ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
