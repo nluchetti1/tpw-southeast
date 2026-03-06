@@ -18,6 +18,7 @@ now = datetime.datetime.utcnow()
 local_file = "latest_mimic.nc"
 found_sat = False
 
+# Search last 4 hours for a valid Satellite NetCDF
 for i in range(4):
     check_time = now - datetime.timedelta(hours=i)
     fname = check_time.strftime("%Y%m%d_%H00.nc")
@@ -37,7 +38,7 @@ if found_sat:
         scn = Scene(reader='mimic_TPW2_nc', filenames=[local_file])
         scn.load(['tpw'])
         tpw_ds = scn.to_xarray_dataset()
-        # Conversion: mm to inches
+        # Convert mm to inches
         tpw_data = tpw_ds['tpw'] / 25.4 
         
         if tpw_data.y[0] < tpw_data.y[-1]:
@@ -46,42 +47,43 @@ if found_sat:
     except Exception as e: print(f"Satpy Error: {e}")
 
 # --- 2. MODEL DATA (RAP 925mb via Herbie) ---
-adv = None
+adv, lons, lats, u, v = None, None, None, None, None
 try:
-    H = Herbie(now.replace(minute=0, second=0, microsecond=0), 
-               model='rap', product='awp130pgrb', fxx=0, verbose=False)
-    
-    ds_rap = H.xarray(":(SPFH|UGRD|VGRD):925 mb").metpy.parse_cf()
-    
-    u = ds_rap['u'].metpy.unit_array
-    v = ds_rap['v'].metpy.unit_array
-    
-    # Handle variable naming (q or spfh)
-    q_key = 'q' if 'q' in ds_rap.data_vars else 'spfh'
-    q = ds_rap[q_key].metpy.unit_array
-    
-    lons, lats = ds_rap.longitude, ds_rap.latitude
-    dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
-    adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
-except Exception as e:
-    print(f"Herbie RAP Error: {e}")
+    # Try the last 3 hours to ensure we find a run with a valid index file
+    for h_back in range(0, 3):
+        try:
+            target_t = (now - datetime.timedelta(hours=h_back)).replace(minute=0, second=0, microsecond=0)
+            H = Herbie(target_t, model='rap', product='awp130pgrb', fxx=0, verbose=False)
+            # Fetch variables
+            ds_rap = H.xarray(":(SPFH|UGRD|VGRD):925 mb").metpy.parse_cf()
+            
+            u, v = ds_rap['u'].metpy.unit_array, ds_rap['v'].metpy.unit_array
+            q_key = 'q' if 'q' in ds_rap.data_vars else 'spfh'
+            q = ds_rap[q_key].metpy.unit_array
+            
+            lons, lats = ds_rap.longitude, ds_rap.latitude
+            dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
+            adv = mpcalc.advection(q, u, v, dx=dx, dy=dy) * 1e6
+            break # Exit loop if successful
+        except: continue
+except Exception as e: print(f"RAP Extraction Error: {e}")
 
 # --- 3. PLOT ---
 fig = plt.figure(figsize=(12, 9), facecolor='black')
 ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
 ax.set_extent([-88, -74, 31, 40]) 
 
-# Background Satellite (Now in Inches)
+# Plot Satellite Background (Inches)
 if tpw_data is not None:
-    # Typical TPW range in inches is 0.5 to 2.5
-    sat_plot = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, 
-                             cmap='viridis', alpha=0.7, shading='auto', vmin=0.5, vmax=2.5)
-    cb = plt.colorbar(sat_plot, ax=ax, orientation='vertical', pad=0.02, aspect=30)
+    # Scale vmin/vmax for inches (typically 0.5 to 2.5 in Southeast)
+    sat_im = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', 
+                           alpha=0.8, shading='auto', vmin=0.5, vmax=2.5)
+    cb = plt.colorbar(sat_im, ax=ax, orientation='vertical', pad=0.02, aspect=30)
     cb.set_label('Precipitable Water (inches)', color='white')
     cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
 
-# RAP Advection Overlay
-if adv is not None:
+# Plot RAP Advection Overlay
+if adv is not None and lons is not None:
     clevs = np.arange(2, 22, 4)
     cs = ax.contour(lons, lats, adv, levels=clevs, colors='red', linewidths=1.2, transform=ccrs.PlateCarree())
     ax.clabel(cs, inline=True, fontsize=9, fmt='%d', colors='white')
@@ -89,9 +91,10 @@ if adv is not None:
               u.values[::4, ::4], v.values[::4, ::4], 
               color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.8)
 
-# Geography Features (with 10m Counties)
+# Geography Features
 ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
 ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan', linewidth=1.0)
+# Add 10m Counties
 counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', 
                                         scale='10m', facecolor='none')
 ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
