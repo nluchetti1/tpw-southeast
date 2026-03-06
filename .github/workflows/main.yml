@@ -1,11 +1,11 @@
 name: Update Weather Dashboard
 on:
   schedule:
-    - cron: '*/15 * * * *' # Runs every 15 minutes
-  workflow_dispatch:      # Allows manual trigger
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: write         # Fixes the 403 Permission Denied error
+  contents: write
 
 jobs:
   run-analysis:
@@ -23,17 +23,18 @@ jobs:
       - name: Install System Geo-Libs
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgeos-dev libproj-dev proj-data proj-bin libhdf5-dev eccodes
+          # Use libeccodes-dev and libeccodes-tools for Noble compatibility
+          sudo apt-get install -y libgeos-dev libproj-dev proj-data proj-bin libhdf5-dev libeccodes-dev libeccodes-tools
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          # Added herbie, cfgrib (GRIB2 driver), and satpy dependencies
           pip install herbie cfgrib satpy pyresample xarray netCDF4 metpy cartopy siphon matplotlib scipy requests
 
-      - name: Verify Herbie Installation
+      - name: Verify Environment
         run: |
-          python -c "from herbie import Herbie; print('Herbie is ready')"
+          python -c "from herbie import Herbie; print('Herbie Loaded')"
+          python -c "import cfgrib; print('GRIB engine Loaded')"
 
       - name: Generate Plot
         run: python generate_map.py
