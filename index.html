@@ -4,34 +4,16 @@
     <meta charset="UTF-8">
     <title>SE US Mesoscale Analysis</title>
     <style>
-        body { background-color: #000; color: #00ff00; font-family: 'Courier New', monospace; text-align: center; margin: 0; padding: 20px; }
-        img { max-width: 100%; height: auto; border: 1px solid #444; box-shadow: 0 0 20px rgba(0,255,0,0.1); }
-        .info { margin-top: 10px; font-size: 0.8rem; color: #888; }
+        body { background: #000; color: #0f0; font-family: monospace; text-align: center; }
+        img { max-width: 95%; border: 1px solid #333; margin-top: 20px; }
     </style>
 </head>
 <body>
     <h1>NC/VA/SC MOISTURE MONITOR</h1>
-    <div id="status" style="font-size: 0.7rem; margin-bottom: 10px;">REFRESHING...</div>
-    
-    <img id="weather-map" src="output_map.png" alt="Map loading...">
-
-    <div class="info">
-        Satellite: MIMIC-TPW2 (SSEC) | Model: RAP 13km (NCEP) | Levels: 925mb
-    </div>
-
+    <img id="map" src="output_map.png" alt="Map loading...">
     <script>
-        const map = document.getElementById('weather-map');
-        const status = document.getElementById('status');
-
-        function update() {
-            const now = new Date();
-            map.src = "output_map.png?v=" + now.getTime();
-            status.innerText = "LAST BROWSER SYNC: " + now.toLocaleTimeString();
-        }
-
-        // Run on load and every 5 minutes
-        update();
-        setInterval(update, 300000);
+        document.getElementById('map').src = "output_map.png?v=" + new Date().getTime();
+        setTimeout(() => { location.reload(); }, 300000);
     </script>
 </body>
 </html>
