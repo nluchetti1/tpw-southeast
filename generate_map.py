@@ -37,7 +37,9 @@ if found_sat:
         scn = Scene(reader='mimic_TPW2_nc', filenames=[local_file])
         scn.load(['tpw'])
         tpw_ds = scn.to_xarray_dataset()
-        tpw_data = tpw_ds['tpw']
+        # Conversion: mm to inches
+        tpw_data = tpw_ds['tpw'] / 25.4 
+        
         if tpw_data.y[0] < tpw_data.y[-1]:
             tpw_data = tpw_data.sortby('y', ascending=False)
         tpw_data = tpw_data.sel(y=slice(42, 28), x=slice(-90, -70))
@@ -46,16 +48,17 @@ if found_sat:
 # --- 2. MODEL DATA (RAP 925mb via Herbie) ---
 adv = None
 try:
-    # Use Herbie to find the latest RAP run, similar to your other code
     H = Herbie(now.replace(minute=0, second=0, microsecond=0), 
                model='rap', product='awp130pgrb', fxx=0, verbose=False)
     
-    # Grab 925mb U/V winds and Specific Humidity for advection
-    ds_rap = H.xarray(":(UGRD|VGRD|SPFH):925 mb").metpy.parse_cf()
+    ds_rap = H.xarray(":(SPFH|UGRD|VGRD):925 mb").metpy.parse_cf()
     
     u = ds_rap['u'].metpy.unit_array
     v = ds_rap['v'].metpy.unit_array
-    q = ds_rap['spfh'].metpy.unit_array
+    
+    # Handle variable naming (q or spfh)
+    q_key = 'q' if 'q' in ds_rap.data_vars else 'spfh'
+    q = ds_rap[q_key].metpy.unit_array
     
     lons, lats = ds_rap.longitude, ds_rap.latitude
     dx, dy = mpcalc.lat_lon_grid_deltas(lons, lats)
@@ -66,11 +69,16 @@ except Exception as e:
 # --- 3. PLOT ---
 fig = plt.figure(figsize=(12, 9), facecolor='black')
 ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-ax.set_extent([-88, -74, 31, 40]) # SE US Focus
+ax.set_extent([-88, -74, 31, 40]) 
 
-# Satellite Background
+# Background Satellite (Now in Inches)
 if tpw_data is not None:
-    ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, cmap='viridis', alpha=0.7, shading='auto')
+    # Typical TPW range in inches is 0.5 to 2.5
+    sat_plot = ax.pcolormesh(tpw_data.x, tpw_data.y, tpw_data, 
+                             cmap='viridis', alpha=0.7, shading='auto', vmin=0.5, vmax=2.5)
+    cb = plt.colorbar(sat_plot, ax=ax, orientation='vertical', pad=0.02, aspect=30)
+    cb.set_label('Precipitable Water (inches)', color='white')
+    cb.ax.yaxis.set_tick_params(color='white', labelcolor='white')
 
 # RAP Advection Overlay
 if adv is not None:
@@ -81,16 +89,14 @@ if adv is not None:
               u.values[::4, ::4], v.values[::4, ::4], 
               color='white', scale=400, transform=ccrs.PlateCarree(), alpha=0.8)
 
-# Map Features (Counties Added)
+# Geography Features (with 10m Counties)
 ax.add_feature(cfeature.STATES.with_scale('10m'), edgecolor='white', linewidth=1.2)
 ax.add_feature(cfeature.COASTLINE.with_scale('10m'), edgecolor='cyan', linewidth=1.0)
-
-# High-res counties
 counties = cfeature.NaturalEarthFeature(category='cultural', name='admin_2_counties', 
                                         scale='10m', facecolor='none')
 ax.add_feature(counties, edgecolor='gray', linewidth=0.4, alpha=0.5)
 
-plt.title(f"MIMIC-TPW2 + RAP 925mb Moisture Advection\nValid: {now.strftime('%H:%MZ %d %b %Y')}", 
+plt.title(f"MIMIC-TPW2 (in) + RAP 925mb Moisture Advection\nValid: {now.strftime('%H:%MZ %d %b %Y')}", 
           color='white', fontsize=14, pad=15)
 
 plt.savefig('output_map.png', facecolor='black', bbox_inches='tight', dpi=150)
